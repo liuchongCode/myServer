@@ -23,7 +23,6 @@
 #include <mutex>
 #include <memory>
 #include <iostream>
-// #include "Log.h"
 
 #define TIMESLOT 5           // 每5秒产生一次alarm信号
 #define MAX_FD 65535         // 最大文件描述符个数
@@ -33,6 +32,7 @@
 // class sort_time_list; // 前向声明
 // class SubReactor;
 // class Timer;
+struct client;
 
 class http_connect
 {
@@ -70,21 +70,25 @@ public:
     
     
     int m_ep_fd; // 所有socket上的事件都被注册到同一个epoll对象中
-    // int m_user_num; // 用户数量
     static const int READ_BUFFER_SIZE = 4096; // 读缓冲区大小
     static const int WRITE_BUFFER_SIZE = 4096; // 写缓冲区大小
 
     http_connect() : m_sock_fd(-1) {
     }
-    // http_connect(SubReactor * _loop) :loop(_loop) {
-    //     // pthread_mutex_init(&m_mutex, NULL);
-    // }
+
     ~http_connect() {
     }
 
     int process();  // 处理任务
     void init(int ep_fd, int sockfd, const sockaddr_in & addr);  // 初始化新接收的连接
-    void close_conn(); // 关闭连接
+    // 关闭该连接
+    void close_conn() {
+        if (m_sock_fd != -1) {
+            close(m_sock_fd);
+            // LOG << "关闭fd = " << m_sock_fd << "\n";
+            m_sock_fd = -1;
+        }
+    }
     bool read(int & saveErrno); // 一次性读取所有数据，非阻塞
     int write(int & saveErrno); // 一次性写完所有数据，非阻塞
     
@@ -104,39 +108,10 @@ public:
         return keep_alive;
     }
 
-    // SubReactor * getLoop() {
-    //     return loop;
-    // }
-
-    // void linkTimer(std::shared_ptr<Timer> _timer) {
-    //     timer = _timer;
-    // }
-
-    // 时间队列中该fd对应的timer节点+1
-    // void addcounts() {
-    //     counts_++;
-    //     // printf("counts_ = %d\n", counts_);
-    // }
-
-    // 时间队列中该fd对应的timer节点-1，如果-1后为0返回true，可以关闭fd
-    // bool isCountsZero() {
-    //     counts_--;
-    //     // printf("counts_ = %d\n", counts_);
-    //     if (counts_ == 0) {
-    //         return true;
-    //     }
-    //     return false;
-    // }
-
-    // std::shared_ptr<Timer> getTimer() {
-    //     return timer;
-    // }
-
+public:
+    std::shared_ptr<client> timer;
 private:  
     pthread_mutex_t m_mutex;  // 访问互斥信号量 
-    // SubReactor * loop;
-    // std::shared_ptr<Timer> timer;
-    // int counts_;
 
     int m_sock_fd; // 该http连接使用的socket
     sockaddr_in m_addr; // 通信的socket地址
@@ -184,27 +159,6 @@ private:
     bool add_content_type();
     bool add_keepalive();
 };
-
-// struct client
-// {
-//     http_connect * user;   // 客户端连接
-//     util_timer * timer;    // 定时器
-//     client() {
-//         user = new http_connect();
-//     }
-// };
-
-// extern sort_time_list timer_list;
-
-// // 添加文件描述符到epoll实例
-// extern void addfd(int ep_fd, int fd, bool one_shot);
-// // 删除epoll实例中删除文件描述符
-// extern void delfd(int ep_fd, int fd);
-// // 修改fd
-// extern void modfd(int ep_fd, int fd, int ev);
-
-// // 创建数组用于保存所有客户端信息
-// extern client * users;
 
 // 信号操作
 extern void sighandler(int sig);
