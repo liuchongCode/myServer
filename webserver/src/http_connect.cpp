@@ -1,4 +1,3 @@
-// #include "util_timer.h"
 #include "SubReactor.h"
 
 // 定义HTTP响应的一些状态信息
@@ -71,15 +70,6 @@ void setSocketNoLinger(int fd)
         用户必须调用epoll_ctl()通过EPOLL_CTL_MOD来使用新的事件掩码重新装填文件描述符
 */
 
-
-// 关闭该连接
-void http_connect::close_conn() {
-    if (m_sock_fd != -1) {
-        close(m_sock_fd);
-        // LOG << "关闭fd = " << fd << "\n";
-    }
-}
-
 void http_connect::init(int ep_fd, int sockfd, const sockaddr_in & addr) {
     m_ep_fd = ep_fd;
     m_sock_fd = sockfd;
@@ -91,13 +81,6 @@ void http_connect::init(int ep_fd, int sockfd, const sockaddr_in & addr) {
         perror("setsockopt");
         exit(-1);
     }
-
-    
-    // printf("添加到epoll\n");
-    // 添加到epoll对象中
-    
-    // loop->addfd(sockfd, addr, true);
-    // printf("进行参数初始化\n");
     init();
 }
 
@@ -124,46 +107,35 @@ void http_connect::init() {
 
 // 一次性读取所有数据，非阻塞
 bool http_connect::read(int & saveErrno) {
-    // struct timeval t1, t2;
-    // gettimeofday(&t1, NULL);
-    // LOG << "start to read\n";
     if (m_read_offset >= READ_BUFFER_SIZE) {
-        printf("读缓冲区已满\n");
+        LOG << m_sock_fd << " : 读缓冲区已满\n";
         return false;
     }
 
     // 读取到的字节
     int bytes_read = 0;
     int num = 0;
-    // printf("读取 ep = %d 中的 sockfd = %d\n",m_ep_fd, m_sock_fd);
     while (1) {
-        LOG << "recving ...\n";
         bytes_read = recv(m_sock_fd, m_read_buf + m_read_offset, READ_BUFFER_SIZE - m_read_offset, MSG_DONTWAIT);
         LOG << "recving end\n";
         if (bytes_read == -1) {
             saveErrno = errno;
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                // if (m_sock_fd == 10)
-                LOG << "recv\n";
+            if (errno == EINTR) // 由于接收到信号而中断，应该重新读
+                continue;
+
+            // 由于设置了非阻塞，当没有数据可读时，不会等待数据，而是直接返回，并设置错误码
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {  
                 break;
             }
-            printf("读取 ep = %d 中的 sockfd = %d\n",m_ep_fd, m_sock_fd);
             perror("recv");
             return false;
         } else if (bytes_read == 0) {
-            LOG << "对方关闭连接\n";
             // 对方关闭连接
             return false;
         }
-
-        // LOG << m_sock_fd << " 中循环第 : " << num++ << "次, 共读 : " << bytes_read << " 个字节\n";
         // 成功读取则修改偏移量
         m_read_offset += bytes_read;
     }
-    // gettimeofday(&t2, NULL);
-    // LOG << "time use : " << (long)(t2.tv_sec - t1.tv_sec) * 1000 + (int)(t2.tv_usec - t1.tv_usec)/1000 << "\n";
-    // if (m_sock_fd == 10)
-    // printf("read data : %s", m_read_buf);
     return true;
 } 
 
@@ -202,7 +174,6 @@ http_connect::LINE_STATUS http_connect::parse_line() {
 http_connect::HTTP_CODE http_connect::process_read(){
     LINE_STATUS line_status = LINE_OK;
     HTTP_CODE ret = NO_REQUEST;
-    // LOG << "start to process_read on line [198]\n";
     char * text = 0;
     while (((m_check_state == CHECK_STATE_CONTENT) && (line_status == LINE_OK)) 
         || ((line_status = parse_line()) == LINE_OK)) {
@@ -213,9 +184,6 @@ http_connect::HTTP_CODE http_connect::process_read(){
 
             // 重置行起始位置
             m_start_line = m_checked_index;
-            // if (m_sock_fd == 10)
-            // printf("got 1 http line : %s\n", text);
-
 
             switch(m_check_state) {
                 case CHECK_STATE_REQUESTLINE: {
@@ -292,8 +260,6 @@ http_connect::HTTP_CODE http_connect::parse_request_line(char * text){
         return BAD_REQUEST;
     }
 
-    // printf("%s %s %s\n", "GET", m_url, m_version);
-
     m_check_state = CHECK_STATE_HEADER; // 请求行解析完后将主状态机状态改为解析请求头
 
     return NO_REQUEST;
@@ -328,7 +294,7 @@ http_connect::HTTP_CODE http_connect::parse_request_head(char * text){
         text += strspn(text, " \t"); // 跳过空格和换行符
         m_host = text;
     } else {
-        // printf("oop! unknow header %s\n", text);
+        LOG << "oop! unknow header\n";
     }
     return NO_REQUEST;
 } 
@@ -350,14 +316,16 @@ http_connect::HTTP_CODE http_connect::do_request(){
     strcpy(m_real_file, doc_root);
     int len = strlen(doc_root);
     strncpy(m_real_file + len, m_url, FILENAME_MAX - len - 1);
-    // printf("文件路径%s\n", m_real_file);
+    LOG << m_real_file << "\n";
     // 获取文件相关状态信息， -1 失败 ， 0 成功
     if (stat(m_real_file, &m_file_stat) < 0) {
+        LOG << "没有该文件\n"; 
         return NO_RESOURCE;
     }
 
     // 判断访问权限
     if (!(m_file_stat.st_mode & S_IROTH)) {
+        LOG << "没有该文件访问权限\n";
         return FORBIDDEN_REQUEST;
     }
 
@@ -365,8 +333,6 @@ http_connect::HTTP_CODE http_connect::do_request(){
     if (S_ISDIR(m_file_stat.st_mode)) {
         return BAD_REQUEST;
     }
-    // if (m_sock_fd == 10)
-    // printf("打开文件%s\n", m_real_file);
     // 以只读方式打开文件
     int fd = open(m_real_file, O_RDONLY);
     // 创建内存映射
@@ -385,25 +351,14 @@ void http_connect::unmap() {
 
 // 一次性写完所有数据，非阻塞
 int http_connect::write(int & saveErrno) {
-    struct timeval t1, t2;
-    gettimeofday(&t1, NULL);
-    LOG << "start to write\n";
-    // if (m_sock_fd == 10 && bytes_have_write < m_iv[0].iov_len)
-        // printf("准备写数据%s长度%d个字节+%d个字节\n", m_write_buf, m_write_offset, (int)m_file_stat.st_size);
     int bytes = 0;
     if (bytes_to_write == 0) {
         // 将要发送的字节为0， 这次响应结束
-        // if (m_sock_fd == 10)
-        LOG << "写数据结束\n";
-        // loop->modfd(m_sock_fd, EPOLLIN);
         init();
-        gettimeofday(&t2, NULL);
-        LOG << "time use : " << (long)(t2.tv_sec - t1.tv_sec) * 1000 + (int)(t2.tv_usec - t1.tv_usec)/1000 << "\n";
         return 1;
     }
 
     while (1) {
-        LOG << "往fd = " << m_sock_fd << " 中写数据\n";
         // 分散写， 将不连续的多块内存的数据一起写出去
         bytes = writev(m_sock_fd, m_iv, m_iv_count);
         if (bytes <= -1) {
@@ -411,18 +366,16 @@ int http_connect::write(int & saveErrno) {
             // 如果TCP写缓冲没有空间,则等待下一轮EPOLLOUT时间
             // 虽然在此期间服务器无法立即接收同一客户的下一个请求，但可以保证连接的完整性
             if (errno == EAGAIN) {
-                LOG << "TCP写缓冲区已满,等待下一轮EPOLLOUT事件\n";
-                gettimeofday(&t2, NULL);
-                LOG << "time use : " << (long)(t2.tv_sec - t1.tv_sec) * 1000 + (int)(t2.tv_usec - t1.tv_usec)/1000 << "\n";
+                // LOG << m_sock_fd << " : TCP写缓冲区已满,等待下一轮EPOLLOUT事件\n";
+                // gettimeofday(&t2, NULL);
+                // LOG << "time use : " << (long)(t2.tv_sec - t1.tv_sec) * 1000 + (int)(t2.tv_usec - t1.tv_usec)/1000 << "\n";
                 return 0;
             }
             LOG << "写出错, ep = " << m_ep_fd << "fd = " << m_sock_fd << '\n';
-            // printf("写入 ep = %d 中的 sockfd = %d\n",m_ep_fd, m_sock_fd);
             perror("writev");
             unmap();
             return -1;
         }
-        // LOG << "写了" << bytes << "个字节\n";
         bytes_to_write -= bytes;
         bytes_have_write += bytes;
 
@@ -434,36 +387,23 @@ int http_connect::write(int & saveErrno) {
             m_iv[0].iov_base = m_write_buf + bytes_have_write;
             m_iv[0].iov_len -=bytes;
         }
-
         if (bytes_to_write <= 0) {
             // 没有数据要发送了
             unmap();
-            // loop->modfd(m_sock_fd, EPOLLIN);
             if (keep_alive) {
                 init();
-                // if (m_sock_fd == 10)
-                LOG<< "keep_alive\n";
-                gettimeofday(&t2, NULL);
-                LOG << "time use : " << (long)(t2.tv_sec - t1.tv_sec) * 1000 + (int)(t2.tv_usec - t1.tv_usec)/1000 << "\n";
                 return 1;
-            } else {
-                gettimeofday(&t2, NULL);
-                LOG << "time use : " << (long)(t2.tv_sec - t1.tv_sec) * 1000 + (int)(t2.tv_usec - t1.tv_usec)/1000 << "\n";
-                // if (m_sock_fd == 10)
-                LOG << pthread_self() << " : 不用保持连接,关闭ep " << m_ep_fd << " : fd = " << m_sock_fd << "\n";
-                // printf("%ld : 不用保持连接,关闭ep %d:fd = %d\n", pthread_self(), m_ep_fd, m_sock_fd);
-                return -1;
             }
+            return -1;
         }
     }
 } 
 
+// 向写缓冲区写数据
 bool http_connect::add_response(const char * format, ...) {
     if (m_write_offset >= WRITE_BUFFER_SIZE) {
         return false;
     }
-
-    // printf("writeoffset = %d\n", m_write_offset);
 
     va_list arglist;
     va_start(arglist, format);
@@ -475,7 +415,7 @@ bool http_connect::add_response(const char * format, ...) {
     va_end(arglist);
     return true;
 
-} // 向写缓冲区写数据
+} 
 
 
 bool http_connect::add_status_line(int status, const char * title) {
@@ -512,7 +452,6 @@ bool http_connect::add_content(const char* content) {
 
 // 响应HTTP请求
 bool http_connect::process_write(HTTP_CODE ret){
-    // LOG << "start to process_write on line [508]\n";
     switch (ret)
     {
         case FILE_REQUEST:
@@ -524,8 +463,6 @@ bool http_connect::process_write(HTTP_CODE ret){
             m_iv[1].iov_len = m_file_stat.st_size;
             m_iv_count = 2;
             bytes_to_write = m_write_offset + m_file_stat.st_size;
-            // if (m_sock_fd == 10)
-            //     printf("file.size() = %d\n", m_file_stat.st_size);
             return true;
         case INTERNAL_ERROR:
             add_status_line( 500, error_500_title );
@@ -573,9 +510,8 @@ bool http_connect::process_write(HTTP_CODE ret){
 // 由线程池中的工作线程调用，处理HTTP请求的入口函数
 int http_connect::process()
 {   
-    LOG << m_sock_fd << " : start to parse\n";
     if (m_read_offset <= 0) {
-        LOG << "读缓冲区为空\n";
+        LOG << m_sock_fd << " : 读缓冲区为空\n";
         return 1;
     }
     // 解析HTTP请求
@@ -584,26 +520,12 @@ int http_connect::process()
         // 请求不完整
         return 1;
     }
-    LOG << m_sock_fd << " : process_read finished\n";
 
     // 生成响应
     bool write_ret = process_write(read_ret);
     if (!write_ret) {
-        printf("生成响应失败\n");
+        LOG << m_sock_fd << " : 生成响应失败\n";
         return -1;
     }
-    LOG << m_sock_fd << " : process_write finished\n";
     return 0;
-    // if (users[m_sock_fd].timer) {
-    //     timer_list.del_timer(users[m_sock_fd].timer);
-    // }
-    // time_t cur = time(NULL);
-    // users[m_sock_fd].timer->expire = cur + 3 * TIMESLOT;
-    // timer_list.adjust_timer(users[m_sock_fd].timer);
-    // if (!write()) {
-    //     call_back(&users[m_sock_fd]);
-    //     if (users[m_sock_fd].timer) {
-    //         timer_list.del_timer(users[m_sock_fd].timer);
-    //     }
-    // }
 }
