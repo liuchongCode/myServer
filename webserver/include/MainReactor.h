@@ -40,10 +40,6 @@ private:
             for (int i = 0; i < SUBCREATOR_NUM; ++i) {
                 subreactor[i] = std::make_unique<SubReactor> ();
             }
-            printf("SubReactor()\n");
-            
-            SubReactor::clientinit();
-            printf("clientinit() %d\n", SUBCREATOR_NUM);
 
             for (int i = 0; i < SUBCREATOR_NUM; ++i) {
                 subreactor[i]->init();
