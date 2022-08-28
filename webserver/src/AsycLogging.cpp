@@ -1,5 +1,4 @@
 #include "AsyncLogging.h"
-#include <iostream>
 
 AsyncLogging::AsyncLogging(std::string logFileName_, int flushInterval)
     : flushInterval_(flushInterval),
@@ -17,7 +16,7 @@ AsyncLogging::AsyncLogging(std::string logFileName_, int flushInterval)
     currentBuffer_->bzero();
     nextBuffer_->bzero();
     buffers_.reserve(16);
-    // std::cout << "AsycLogging() : 创建异步日志线程，并初始化两个缓冲区\n";
+    start();    // 单例模式，对象实例化时启动线程
 }
 
 // 发送方
@@ -44,8 +43,8 @@ void AsyncLogging::append(const char * logline, int len) {
 
 // 后端接收方线程调用该函数，周期性的flush数据到日志文件中
 void AsyncLogging::threadFunc() {
-    assert(running_ == true);
-    // std::cout << "AsyncLogging::threadFunc()执行异步线程, 文件名:" << basename_ << std::endl;
+    if (running_ != true)
+        return;
     LogFile output(basename_);
     BufferPtr newBuffer1(new Buffer);       // 两块空闲缓冲区，以备在临界区内交换
     BufferPtr newBuffer2(new Buffer);
@@ -57,15 +56,13 @@ void AsyncLogging::threadFunc() {
         assert(newBuffer1 && newBuffer1->length() == 0);
         assert(newBuffer2 && newBuffer2->length() == 0);
         assert(buffersToWrite.empty());
-
         // 将要写入的数据（buffers_中的数据），swap到缓冲区buffersToWrite中
         {
             mutex_.lock();
             // 如果buffer为空，那么表示没有数据需要写入文件，就指定等待时间
             if (buffers_.empty()) {
-                bool ret = cond_.timewait(flushInterval_);
+                cond_.timewait(flushInterval_);
             }
-
             // 无论 cond_ 为什么被唤醒，都要将currentBuffer_ 放入 buffers_中
             buffers_.push_back(currentBuffer_);     // 移动
             currentBuffer_.reset();
@@ -78,7 +75,6 @@ void AsyncLogging::threadFunc() {
         }
 
         assert(!buffersToWrite.empty());
-
         // 如果将要写入的buffer 个数大于25，将多余的数据删除，消息堆积
         if (buffersToWrite.size() > 25) {
             // 丢掉多余日志，腾出内存，仅保留两块缓冲区
@@ -113,11 +109,10 @@ void AsyncLogging::threadFunc() {
             newBuffer2->reset();
         }
 
-        // 清空s
+        // 清空
         buffersToWrite.clear();
         output.flush();
     }
     // 结束后仍要将剩余数据写入文件
     output.flush();
-
 }
