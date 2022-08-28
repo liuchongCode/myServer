@@ -1,10 +1,9 @@
 #ifndef MAINREACTOR_H
 #define MAINREACTOR_H
 
-// #include "util_timer.h"
 #include "SubReactor.h"
 
-#define SUBCREATOR_NUM 4
+#define SUBCREATOR_NUM 8
 
 /*
     负责通过epoll监控连接事件：
@@ -14,23 +13,32 @@ class MainReactor
 {
 private:
     int select;
+    /*
+        如果一个类定义在另一个类的内部，这个内部类就叫做内部类。
+        注意此时这个内部类是一个独立的类，它不属于外部类，更不能通过外部类的对象去调用内部类。
+        外部类对内部类没有任何优越的访问权限。
+
+        即说：内部类就是外部类的友元类。
+        注意友元类的定义，内部类可以通过外部类的对象参数来访问外部类中的所有成员。
+        但是外部类不是内部类的友元。
+    */
     class Acceptor // 内置连接类
     {
     private:
-        sem *m_sem;     
+        std::unique_ptr<sem> m_sem;     
         int m_ep_fd;
         int lsock;
-        SubReactor * subreactor[SUBCREATOR_NUM];
+        std::unique_ptr<SubReactor> subreactor[SUBCREATOR_NUM];
     public:
         Acceptor() {
         }
-        Acceptor(int _lsock): lsock(_lsock) {}
+        Acceptor(const int& _lsock): lsock(_lsock) {}
         ~Acceptor() {}
 
         void init() {
-            m_sem = new sem(1);
+            m_sem = std::make_unique<sem> (1);
             for (int i = 0; i < SUBCREATOR_NUM; ++i) {
-                subreactor[i] = new SubReactor();
+                subreactor[i] = std::make_unique<SubReactor> ();
             }
             printf("SubReactor()\n");
             
@@ -38,12 +46,11 @@ private:
             printf("clientinit() %d\n", SUBCREATOR_NUM);
 
             for (int i = 0; i < SUBCREATOR_NUM; ++i) {
-                printf("初始化subcreator[%d] = \n", i);
                 subreactor[i]->init();
             }
         }
 
-        void process(int connfd, sockaddr_in caddr, int num) {
+        void process(const int& connfd, const sockaddr_in& caddr, const int& num) {
 
             // 将新的客户端数据初始化并放入数组中
             // 随机选择一个SubCreator对象
@@ -56,10 +63,10 @@ private:
     int m_ep_l;
     int lsock;
     epoll_event ep_events;  
-    Acceptor * ac;
-    ThreadPool * acpool;
+    std::shared_ptr<Acceptor> ac;
+    std::unique_ptr<ThreadPool> acpool;
 public:
-    MainReactor(int _lsock) : lsock(_lsock), acpool(new ThreadPool(8)), select(-1) {
+    MainReactor(int _lsock) : lsock(_lsock), acpool(new ThreadPool(4)), select(-1) {
         m_ep_l = epoll_create(1);
         if (m_ep_l == -1) {
             perror("epoll_create");
@@ -72,13 +79,7 @@ public:
 
         // 设置文件描述符非阻塞
         setnonblocking(lsock);
-        ac = new Acceptor(lsock);
-        // acpool = NULL; // 负责业务逻辑操作
-        // try {
-        //     acpool = new ThreadPool(4);
-        // } catch (...) {
-        //     exit(-1);
-        // }
+        ac = std::make_unique<Acceptor> ();
     }
     ~MainReactor() {}
 
@@ -104,8 +105,7 @@ public:
                 }
                 LOG << "New connection from " << inet_ntoa(caddr.sin_addr) << ":" << ntohs(caddr.sin_port);
                 select = connfd % SUBCREATOR_NUM;
-                acpool->submit(std::bind(&Acceptor::process, ac, connfd, caddr, select));
-                // ac->process(connfd, caddr, select);  
+                acpool->submit(std::bind(&Acceptor::process, ac.get(), connfd, caddr, select));
             } 
             if (connfd == -1 && errno != EAGAIN) {
                 perror("accept");
